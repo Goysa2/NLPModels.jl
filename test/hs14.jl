@@ -10,36 +10,99 @@ function hs14_autodiff()
   return ADNLPModel(f, x0, c=c, lcon=lcon, ucon=ucon)
 end
 
-function hs14_simple()
+mutable struct HS14 <: AbstractNLPModel
+  meta :: NLPModelMeta
+  counters :: Counters
+end
 
-  x0 = [2.0; 2.0]
-  f(x) = (x[1] - 2)^2 + (x[2] - 1)^2
-  g(x) = [2*(x[1] - 2); 2*(x[2] - 1)]
-  g!(x, gx) = begin
-    gx[1] = 2*(x[1] - 2)
-    gx[2] = 2*(x[2] - 1)
-    return gx
+function HS14()
+  meta = NLPModelMeta(2, nnzh=2, ncon=2, x0=[2.0; 2.0], lcon=[0.0; 0.0], ucon=[0.0; Inf], name="HS14")
+
+  return HS14(meta, Counters())
+end
+
+function NLPModels.obj(nlp :: HS14, x :: AbstractVector)
+  increment!(nlp, :neval_obj)
+  return (x[1] - 2)^2 + (x[2] - 1)^2
+end
+
+function NLPModels.grad!(nlp :: HS14, x :: AbstractVector, gx :: AbstractVector)
+  increment!(nlp, :neval_grad)
+  gx .= [2 * (x[1] - 2); 2 * (x[2] - 1)]
+  return gx
+end
+
+function NLPModels.hess(nlp :: HS14, x :: AbstractVector; obj_weight=1.0, y=Float64[])
+  increment!(nlp, :neval_hess)
+  if length(y) > 0
+    return y[2] * [-0.5 0.0; 0.0 -2.0] + 2obj_weight * I
+  else
+    return [2.0 0; 0 2] * obj_weight
   end
+end
 
-  c(x) = [-x[1]^2/4 - x[2]^2 + 1; x[1] - 2 * x[2] + 1]
-  c!(x, cx) = begin cx[1:2] = c(x) end
-  J(x) = [-x[1]/2  -2*x[2];  1.0  -2.0]
-  Jc(x) = findnz(sparse(J(x)))
-  Jp(x, v) = J(x) * v
-  Jp!(x, v, w) = begin w[1:2] = J(x) * v end
-  Jtp(x, v) = J(x)' * v
-  Jtp!(x, v, w) = begin w[1:2] = J(x)' * v end
+function NLPModels.hess_structure(nlp :: HS14)
+  return ([1, 2], [1, 2])
+end
 
-  H(x) = 2*eye(2)
-  C(x, y) = [-0.5  0.0; 0.0  -2.0]*y[1]
-  W(x; obj_weight=1.0, y=zeros(1)) = tril(obj_weight*H(x) + C(x,y))
-  Wcoord(x; obj_weight=1.0, y=zeros(1)) = findnz(sparse(W(x; obj_weight=obj_weight, y=y)))
-  Wp(x, v; obj_weight=1.0, y=zeros(1)) = (obj_weight*H(x) + C(x,y))*v
-  Wp!(x, v, Wv; obj_weight=1.0, y=zeros(1)) = begin Wv[1:2] = (obj_weight*H(x) + C(x,y))*v end
-  lcon = [0.0; 0.0]
-  ucon = [Inf; 0.0]
+function NLPModels.hess_coord!(nlp :: HS14, x :: AbstractVector, rows :: AbstractVector{Int}, cols :: AbstractVector{Int}, vals :: AbstractVector; obj_weight=1.0, y=AbstractVector[])
+  increment!(nlp, :neval_hess)
+  vals .= 2obj_weight
+  if length(y) > 0
+    vals[1] -= 0.5y[2]
+    vals[2] -= 2.0y[2]
+  end
+  return rows, cols, vals
+end
 
-  return SimpleNLPModel(f, x0, g=g, g! =g!, c=c, c! =c!, J=J, Jcoord=Jc, Jp=Jp,
-      Jp! =Jp!, Jtp=Jtp, Jtp! =Jtp!, H=W, Hcoord=Wcoord, Hp=Wp, Hp! =Wp!,
-      lcon=lcon, ucon=ucon)
+function NLPModels.hess_coord(nlp :: HS14, x :: AbstractVector; obj_weight=1.0, y=Float64[])
+  increment!(nlp, :neval_hess)
+  w = length(y) == 0 ? 0.0 : y[2]
+  return ([1, 2], [1, 2], [-0.5w + 2obj_weight, -2w + 2obj_weight])
+end
+
+function NLPModels.hprod!(nlp :: HS14, x :: AbstractVector, v :: AbstractVector, Hv :: AbstractVector; obj_weight=1.0, y=Float64[])
+  increment!(nlp, :neval_hprod)
+  nlp.counters.neval_hess -= 1
+  Hx = Symmetric(hess(nlp, x, obj_weight=obj_weight, y=y), :L)
+  Hv .= Hx * v
+  return Hv
+end
+
+function NLPModels.cons!(nlp :: HS14, x :: AbstractVector, cx :: AbstractVector)
+  increment!(nlp, :neval_cons)
+  cx .= [x[1] - 2 * x[2] + 1; -x[1]^2/4 - x[2]^2 + 1]
+  return cx
+end
+
+function NLPModels.jac(nlp :: HS14, x :: AbstractVector)
+  increment!(nlp, :neval_jac)
+  return [1.0 -2.0; -x[1] / 2  -2 * x[2]]
+end
+
+function NLPModels.jac_structure(nlp :: HS14)
+  return ([1, 2, 1, 2], [1, 1, 2, 2])
+end
+
+function NLPModels.jac_coord!(nlp :: HS14, x :: AbstractVector, rows :: AbstractVector, cols :: AbstractVector, vals :: AbstractVector)
+  increment!(nlp, :neval_jac)
+  vals .= [1.0, -x[1] / 2, -2.0, -2 * x[2]]
+  return rows, cols, vals
+end
+
+function NLPModels.jac_coord(nlp :: HS14, x :: AbstractVector)
+  increment!(nlp, :neval_jac)
+  return ([1, 2, 1, 2], [1, 1, 2, 2], [1.0, -x[1] / 2, -2.0, -2 * x[2]])
+end
+
+function NLPModels.jprod!(nlp :: HS14, x :: AbstractVector, v :: AbstractVector, Jv :: AbstractVector)
+  increment!(nlp, :neval_jprod)
+  Jv .= [v[1] - 2 * v[2]; -x[1] * v[1] / 2 - 2 * x[2] * v[2]]
+  return Jv
+end
+
+function NLPModels.jtprod!(nlp :: HS14, x :: AbstractVector, v :: AbstractVector, Jtv :: AbstractVector)
+  increment!(nlp, :neval_jtprod)
+  Jtv .= [v[1] - x[1] * v[2] / 2; -2 * v[1] - 2 * x[2] * v[2]]
+  return Jtv
 end

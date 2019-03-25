@@ -2,21 +2,25 @@ using Documenter, NLPModels
 
 makedocs(
   modules = [NLPModels],
-  doctest = false,
+  doctest = true,
+  linkcheck = true,
+  strict = true,
   assets = ["assets/style.css"],
-  format = :html,
+  format = Documenter.HTML(
+             prettyurls = get(ENV, "CI", nothing) == "true"
+            ),
   sitename = "NLPModels.jl",
-  pages = Any["Home" => "index.md",
-              "Models" => "models.md",
-              "Tools" => "tools.md",
-              "Tutorial" => "tutorial.md",
-              "API" => "api.md",
-              "Reference" => "reference.md"]
+  pages = ["Home" => "index.md",
+           "Models" => "models.md",
+           "Tools" => "tools.md",
+           "Tutorial" => "tutorial.md",
+           "API" => "api.md",
+           "Reference" => "reference.md"
+          ]
 )
 
 deploydocs(deps = nothing, make = nothing,
   repo = "github.com/JuliaSmoothOptimizers/NLPModels.jl.git",
   target = "build",
-  julia = "0.6",
-  latest = "master"
+  devbranch = "master"
 )

@@ -1,6 +1,6 @@
 using ForwardDiff
 
-export ADNLPModel, obj, grad, grad!, cons, cons!, jac_coord, jac, jprod,
+export ADNLPModel, obj, grad, grad!, cons, cons!, jac, jprod,
        jprod!, jtprod, jtprod!, hess, hprod, hprod!
 
 """ADNLPModel is an AbstractNLPModel using ForwardDiff to compute the
@@ -50,10 +50,11 @@ mutable struct ADNLPModel <: AbstractNLPModel
   c :: Function
 end
 
-function ADNLPModel(f::Function, x0::AbstractVector; y0::AbstractVector = Float64[],
-    lvar::AbstractVector = Float64[], uvar::AbstractVector = Float64[], lcon::AbstractVector = Float64[], ucon::AbstractVector = Float64[],
+function ADNLPModel(f::Function, x0::AbstractVector; y0::AbstractVector = eltype(x0)[],
+                    lvar::AbstractVector = eltype(x0)[], uvar::AbstractVector = eltype(x0)[],
+                    lcon::AbstractVector = eltype(x0)[], ucon::AbstractVector = eltype(x0)[],
     c::Function = (args...)->throw(NotImplementedError("cons")),
-    name::String = "Generic", lin::AbstractVector{Int}=Int[])
+    name::String = "Generic", lin::AbstractVector{<: Integer}=Int[])
 
   nvar = length(x0)
   length(lvar) == 0 && (lvar = -Inf*ones(nvar))
@@ -109,18 +110,28 @@ function cons!(nlp :: ADNLPModel, x :: AbstractVector, c :: AbstractVector)
   return c
 end
 
-function jac_coord(nlp :: ADNLPModel, x :: AbstractVector)
-  increment!(nlp, :neval_jac)
-  J = ForwardDiff.jacobian(nlp.c, x)
-  rows = [j for i = 1:nlp.meta.nvar for j = 1:nlp.meta.ncon]
-  cols = [i for i = 1:nlp.meta.nvar for j = 1:nlp.meta.ncon]
-  vals = [J[j,i] for i = 1:nlp.meta.nvar for j = 1:nlp.meta.ncon]
-  return rows, cols, vals
-end
-
 function jac(nlp :: ADNLPModel, x :: AbstractVector)
   increment!(nlp, :neval_jac)
   return ForwardDiff.jacobian(nlp.c, x)
+end
+
+function jac_structure(nlp :: ADNLPModel)
+  m, n = nlp.meta.ncon, nlp.meta.nvar
+  I = ((i,j) for i = 1:m, j = 1:n)
+  return (getindex.(I, 1)[:], getindex.(I, 2)[:])
+end
+
+function jac_coord!(nlp :: ADNLPModel, x :: AbstractVector, rows :: AbstractVector{<: Integer}, cols :: AbstractVector{<: Integer}, vals :: AbstractVector)
+  Jx = jac(nlp, x)
+  vals .= Jx[:]
+  return rows, cols, vals
+end
+
+function jac_coord(nlp :: ADNLPModel, x :: AbstractVector)
+  Jx = jac(nlp, x)
+  m, n = nlp.meta.ncon, nlp.meta.nvar
+  I = ((i,j) for i = 1:m, j = 1:n)
+  return (getindex.(I, 1)[:], getindex.(I, 2)[:], Jx[:])
 end
 
 function jprod(nlp :: ADNLPModel, x :: AbstractVector, v :: AbstractVector)
@@ -145,7 +156,7 @@ function jtprod!(nlp :: ADNLPModel, x :: AbstractVector, v :: AbstractVector, Jt
   return Jtv
 end
 
-function hess(nlp :: ADNLPModel, x :: AbstractVector; obj_weight = 1.0, y :: AbstractVector = Float64[])
+function hess(nlp :: ADNLPModel, x :: AbstractVector; obj_weight :: Real = one(eltype(x)), y :: AbstractVector = eltype(x)[])
   increment!(nlp, :neval_hess)
   Hx = obj_weight == 0.0 ? spzeros(nlp.meta.nvar, nlp.meta.nvar) :
        ForwardDiff.hessian(nlp.f, x) * obj_weight
@@ -157,22 +168,36 @@ function hess(nlp :: ADNLPModel, x :: AbstractVector; obj_weight = 1.0, y :: Abs
   return tril(Hx)
 end
 
-function hess_coord(nlp :: ADNLPModel, x :: AbstractVector; obj_weight = 1.0, y :: AbstractVector = Float64[])
-  H = hess(nlp, x, obj_weight=obj_weight, y=y)
-  rows = [i for j = 1:nlp.meta.nvar for i = j:nlp.meta.nvar]
-  cols = [j for j = 1:nlp.meta.nvar for i = j:nlp.meta.nvar]
-  vals = [H[i,j] for j = 1:nlp.meta.nvar for i = j:nlp.meta.nvar]
+function hess_structure(nlp :: ADNLPModel)
+  n = nlp.meta.nvar
+  I = ((i,j) for i = 1:n, j = 1:n if i ≥ j)
+  return (getindex.(I, 1), getindex.(I, 2))
+end
+
+function hess_coord!(nlp :: ADNLPModel, x :: AbstractVector, rows :: AbstractVector{<: Integer}, cols :: AbstractVector{<: Integer}, vals :: AbstractVector; obj_weight :: Real = one(eltype(x)), y :: AbstractVector = eltype(x)[])
+  Hx = hess(nlp, x, obj_weight=obj_weight, y=y)
+  for k = 1:nlp.meta.nnzh
+    i, j = rows[k], cols[k]
+    vals[k] = Hx[i,j]
+  end
   return rows, cols, vals
 end
 
+function hess_coord(nlp :: ADNLPModel, x :: AbstractVector; obj_weight :: Real = one(eltype(x)), y :: AbstractVector = eltype(x)[])
+  Hx = hess(nlp, x, obj_weight=obj_weight, y=y)
+  n = nlp.meta.nvar
+  I = ((i,j,Hx[i,j]) for i = 1:n, j = 1:n if i ≥ j)
+  return (getindex.(I, 1), getindex.(I, 2), getindex.(I, 3))
+end
+
 function hprod(nlp :: ADNLPModel, x :: AbstractVector, v :: AbstractVector;
-    obj_weight = 1.0, y :: AbstractVector = Float64[])
+               obj_weight :: Real = one(eltype(x)), y :: AbstractVector = eltype(x)[])
   Hv = zeros(nlp.meta.nvar)
   return hprod!(nlp, x, v, Hv, obj_weight=obj_weight, y=y)
 end
 
 function hprod!(nlp :: ADNLPModel, x :: AbstractVector, v :: AbstractVector, Hv :: AbstractVector;
-    obj_weight = 1.0, y :: AbstractVector = Float64[])
+                obj_weight :: Real = one(eltype(x)), y :: AbstractVector = eltype(x)[])
   increment!(nlp, :neval_hprod)
   n = nlp.meta.nvar
   Hv[1:n] = obj_weight == 0.0 ? zeros(nlp.meta.nvar) :

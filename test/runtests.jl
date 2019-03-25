@@ -1,4 +1,4 @@
-using Base.Test, NLPModels, LinearOperators
+using Test, NLPModels, LinearAlgebra, LinearOperators, Printf, SparseArrays
 
 # Including problems so that they won't be multiply loaded
 for problem in [:brownden, :genrose, :hs5, :hs6, :hs10, :hs11, :hs14]
@@ -45,7 +45,7 @@ model = ADNLPModel(x->dot(x,x), zeros(2), name="square")
 @assert model.meta.name == "square"
 
 model = genrose_autodiff()
-for counter in fieldnames(model.counters)
+for counter in fieldnames(typeof(model.counters))
   @eval @assert $counter(model) == 0
 end
 
@@ -72,7 +72,12 @@ for problem in ["brownden", "hs5", "hs6", "hs10", "hs11", "hs14"]
 end
 
 include("test_autodiff_model.jl")
-include("test_simple_model.jl")
 include("test_view_subarray.jl")
+test_view_subarrays()
 include("test_nlsmodels.jl")
 include("nls_consistency.jl")
+consistent_nls()
+include("test_feasibility_form_nls.jl")
+include("multiple-precision.jl")
+include("test_memory_of_coord.jl")
+test_memory_of_coord()

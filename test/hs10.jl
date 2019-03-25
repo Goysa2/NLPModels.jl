@@ -1,3 +1,5 @@
+using NLPModels: increment!
+
 #Problem 10 in the Hock-Schittkowski suite
 function hs10_autodiff()
 
@@ -10,36 +12,99 @@ function hs10_autodiff()
   return ADNLPModel(f, x0, c=c, lcon=lcon, ucon=ucon)
 end
 
-function hs10_simple()
+mutable struct HS10 <: AbstractNLPModel
+  meta :: NLPModelMeta
+  counters :: Counters
+end
 
-  x0 = [-10.0; 10.0]
-  f(x) = x[1] - x[2]
-  g(x) = [1.0; -1.0]
-  g!(x, gx) = begin
-    gx[1] = 1.0
-    gx[2] = -1.0
-    return gx
+function HS10()
+  meta = NLPModelMeta(2, ncon=1, x0=[-10.0; 10.0],
+                      lcon=[0.0], ucon=[Inf], name="HS10")
+
+  return HS10(meta, Counters())
+end
+
+function NLPModels.obj(nlp :: HS10, x :: AbstractVector)
+  increment!(nlp, :neval_obj)
+  return x[1] - x[2]
+end
+
+function NLPModels.grad!(nlp :: HS10, x :: AbstractVector, gx :: AbstractVector)
+  increment!(nlp, :neval_grad)
+  gx .= [1.0; -1.0]
+  return gx
+end
+
+function NLPModels.hess(nlp :: HS10, x :: AbstractVector; obj_weight=1.0, y=Float64[])
+  increment!(nlp, :neval_hess)
+  if length(y) > 0
+    return y[1] * [-6.0  0.0; 2.0  -2.0]
+  else
+    return spzeros(2, 2)
   end
+end
 
-  c(x) = [-3 * x[1]^2 + 2 * x[1] * x[2] - x[2]^2 + 1.0]
-  c!(x, cx) = begin cx[1:1] = c(x) end
-  J(x) = [-6 * x[1] + 2 * x[2]  2 * x[1] - 2 * x[2]]
-  Jc(x) = findnz(sparse(J(x)))
-  Jp(x, v) = J(x) * v
-  Jp!(x, v, w) = begin w[1:1] = J(x) * v end
-  Jtp(x, v) = J(x)' * v
-  Jtp!(x, v, w) = begin w[1:2] = J(x)' * v end
+function NLPModels.hess_structure(nlp :: HS10)
+  return ([1, 2, 2], [1, 1, 2])
+end
 
-  H(x) = zeros(2,2)
-  C(x, y) = [-6.0 2.0; 2.0 -2.0]*y[1]
-  W(x; obj_weight=1.0, y=zeros(1)) = tril(obj_weight*H(x) + C(x,y))
-  Wcoord(x; obj_weight=1.0, y=zeros(1)) = findnz(sparse(W(x; obj_weight=obj_weight, y=y)))
-  Wp(x, v; obj_weight=1.0, y=zeros(1)) = (obj_weight*H(x) + C(x,y))*v
-  Wp!(x, v, Wv; obj_weight=1.0, y=zeros(1)) = begin Wv[1:2] = (obj_weight*H(x) + C(x,y))*v end
-  lcon = [0.0]
-  ucon = [Inf]
+function NLPModels.hess_coord!(nlp :: HS10, x :: AbstractVector, rows :: AbstractVector{Int}, cols :: AbstractVector{Int}, vals :: AbstractVector; obj_weight=1.0, y=AbstractVector[])
+  increment!(nlp, :neval_hess)
+  w = length(y) == 0 ? 0.0 : y[1]
+  vals .= [-6.0, 2.0, -2.0] * w
+  return rows, cols, vals
+end
 
-  return SimpleNLPModel(f, x0, g=g, g! =g!, c=c, c! =c!, J=J, Jcoord=Jc, Jp=Jp,
-      Jp! =Jp!, Jtp=Jtp, Jtp! =Jtp!, H=W, Hcoord=Wcoord, Hp=Wp, Hp! =Wp!,
-      lcon=lcon, ucon=ucon)
+function NLPModels.hess_coord(nlp :: HS10, x :: AbstractVector; obj_weight=1.0, y=Float64[])
+  increment!(nlp, :neval_hess)
+  w = length(y) == 0 ? 0.0 : y[1]
+  return ([1, 2, 2], [1, 1, 2], [-6.0, 2.0, -2.0] * w)
+end
+
+function NLPModels.hprod!(nlp :: HS10, x :: AbstractVector, v :: AbstractVector, Hv :: AbstractVector; obj_weight=1.0, y=Float64[])
+  increment!(nlp, :neval_hprod)
+  if length(y) > 0
+    Hv[1:nlp.meta.nvar] .= y[1] * [-6.0 * v[1] + 2.0 * v[2]; 2.0 * v[1] - 2.0 * v[2]]
+  else
+    fill!(Hv, 0.0)
+  end
+  return Hv
+end
+
+function NLPModels.cons!(nlp :: HS10, x :: AbstractVector, cx :: AbstractVector)
+  increment!(nlp, :neval_cons)
+  cx .= [-3 * x[1]^2 + 2 * x[1] * x[2] - x[2]^2 + 1.0]
+  return cx
+end
+
+function NLPModels.jac(nlp :: HS10, x :: AbstractVector)
+  increment!(nlp, :neval_jac)
+  return [-6 * x[1] + 2 * x[2]   2 * x[1] - 2 * x[2]]
+end
+
+function NLPModels.jac_structure(nlp :: HS10)
+  return ([1, 1], [1, 2])
+end
+
+function NLPModels.jac_coord!(nlp :: HS10, x :: AbstractVector, rows :: AbstractVector, cols :: AbstractVector, vals :: AbstractVector)
+  increment!(nlp, :neval_jac)
+  vals .= [-6 * x[1] + 2 * x[2], 2 * x[1] - 2 * x[2]]
+  return rows, cols, vals
+end
+
+function NLPModels.jac_coord(nlp :: HS10, x :: AbstractVector)
+  increment!(nlp, :neval_jac)
+  return ([1, 1], [1, 2], [-6 * x[1] + 2 * x[2], 2 * x[1] - 2 * x[2]])
+end
+
+function NLPModels.jprod!(nlp :: HS10, x :: AbstractVector, v :: AbstractVector, Jv :: AbstractVector)
+  increment!(nlp, :neval_jprod)
+  Jv .= [(-6 * x[1] + 2 * x[2]) * v[1] + (2 * x[1] - 2 * x[2]) * v[2]]
+  return Jv
+end
+
+function NLPModels.jtprod!(nlp :: HS10, x :: AbstractVector, v :: AbstractVector, Jtv :: AbstractVector)
+  increment!(nlp, :neval_jtprod)
+  Jtv .= [-6 * x[1] + 2 * x[2];  2 * x[1] - 2 * x[2]] * v[1]
+  return Jtv
 end

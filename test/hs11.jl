@@ -11,36 +11,98 @@ function hs11_autodiff()
 
 end
 
-function hs11_simple()
+mutable struct HS11 <: AbstractNLPModel
+  meta :: NLPModelMeta
+  counters :: Counters
+end
 
-  x0 = [4.9; 0.1]
-  f(x) = (x[1] - 5)^2 + x[2]^2 - 25
-  g(x) = [2*(x[1] - 5); 2*x[2]]
-  g!(x, gx) = begin
-    gx[1] = 2*(x[1] - 5)
-    gx[2] = 2*x[2]
-    return gx
+function HS11()
+  meta = NLPModelMeta(2, ncon=1, nnzh=2, nnzj=2, x0=[4.9; 0.1], lcon=[-Inf], ucon=[0.0], name="HS11")
+
+  return HS11(meta, Counters())
+end
+
+function NLPModels.obj(nlp :: HS11, x :: AbstractVector)
+  increment!(nlp, :neval_obj)
+  return (x[1] - 5)^2 + x[2]^2 - 25
+end
+
+function NLPModels.grad!(nlp :: HS11, x :: AbstractVector, gx :: AbstractVector)
+  increment!(nlp, :neval_grad)
+  gx .= [2 * (x[1] - 5); 2 * x[2]]
+  return gx
+end
+
+function NLPModels.hess(nlp :: HS11, x :: AbstractVector; obj_weight=1.0, y=Float64[])
+  increment!(nlp, :neval_hess)
+  if length(y) > 0
+    return y[1] * [-2.0 0; 0 0] + 2obj_weight*I
+  else
+    return [2.0 0; 0 2] * obj_weight
   end
+end
 
-  c(x) = [-x[1]^2 + x[2]]
-  c!(x, cx) = begin cx[1:1] = c(x) end
-  J(x) = [-2*x[1]  1.0]
-  Jc(x) = findnz(sparse(J(x)))
-  Jp(x, v) = J(x) * v
-  Jp!(x, v, w) = begin w[1:1] = J(x) * v end
-  Jtp(x, v) = J(x)' * v
-  Jtp!(x, v, w) = begin w[1:2] = J(x)' * v end
+function NLPModels.hess_structure(nlp :: HS11)
+  return ([1, 2], [1, 2])
+end
 
-  H(x) = 2*eye(2)
-  C(x, y) = [-2.0 0.0; 0.0 0.0]*y[1]
-  W(x; obj_weight=1.0, y=zeros(1)) = tril(obj_weight*H(x) + C(x,y))
-  Wcoord(x; obj_weight=1.0, y=zeros(1)) = findnz(sparse(W(x; obj_weight=obj_weight, y=y)))
-  Wp(x, v; obj_weight=1.0, y=zeros(1)) = (obj_weight*H(x) + C(x,y))*v
-  Wp!(x, v, Wv; obj_weight=1.0, y=zeros(1)) = begin Wv[1:2] = (obj_weight*H(x) + C(x,y))*v end
-  lcon = [-Inf]
-  ucon = [0.0]
+function NLPModels.hess_coord!(nlp :: HS11, x :: AbstractVector, rows :: AbstractVector{Int}, cols :: AbstractVector{Int}, vals :: AbstractVector; obj_weight=1.0, y=AbstractVector[])
+  increment!(nlp, :neval_hess)
+  vals .= 2obj_weight
+  if length(y) > 0
+    vals[1] -= 2y[1]
+  end
+  return rows, cols, vals
+end
 
-  return SimpleNLPModel(f, x0, g=g, g! =g!, c=c, c! =c!, J=J, Jcoord=Jc, Jp=Jp,
-      Jp! =Jp!, Jtp=Jtp, Jtp! =Jtp!, H=W, Hcoord=Wcoord, Hp=Wp, Hp! =Wp!,
-      lcon=lcon, ucon=ucon)
+function NLPModels.hess_coord(nlp :: HS11, x :: AbstractVector; obj_weight=1.0, y=Float64[])
+  increment!(nlp, :neval_hess)
+  w = length(y) == 0 ? 0.0 : y[1]
+  return ([1, 2], [1, 2], 2obj_weight * ones(2) + [-2w; 0.0])
+end
+
+function NLPModels.hprod!(nlp :: HS11, x :: AbstractVector, v :: AbstractVector, Hv :: AbstractVector; obj_weight=1.0, y=Float64[])
+  increment!(nlp, :neval_hprod)
+  nlp.counters.neval_hess -= 1
+  Hx = Symmetric(hess(nlp, x, obj_weight=obj_weight, y=y), :L)
+  Hv .= Hx * v
+  return Hv
+end
+
+function NLPModels.cons!(nlp :: HS11, x :: AbstractVector, cx :: AbstractVector)
+  increment!(nlp, :neval_cons)
+  cx .= [-x[1]^2 + x[2]]
+  return cx
+end
+
+function NLPModels.jac(nlp :: HS11, x :: AbstractVector)
+  increment!(nlp, :neval_jac)
+  return [-2 * x[1]  1.0]
+end
+
+function NLPModels.jac_structure(nlp :: HS11)
+  return ([1, 1], [1, 2])
+end
+
+function NLPModels.jac_coord!(nlp :: HS11, x :: AbstractVector, rows :: AbstractVector, cols :: AbstractVector, vals :: AbstractVector)
+  increment!(nlp, :neval_jac)
+  vals .= [-2 * x[1], 1.0]
+  return rows, cols, vals
+end
+
+function NLPModels.jac_coord(nlp :: HS11, x :: AbstractVector)
+  increment!(nlp, :neval_jac)
+  return ([1, 1], [1, 2], [-2 * x[1], 1.0])
+end
+
+function NLPModels.jprod!(nlp :: HS11, x :: AbstractVector, v :: AbstractVector, Jv :: AbstractVector)
+  increment!(nlp, :neval_jprod)
+  Jv .= [-2 * x[1] * v[1] + v[2]]
+  return Jv
+end
+
+function NLPModels.jtprod!(nlp :: HS11, x :: AbstractVector, v :: AbstractVector, Jtv :: AbstractVector)
+  increment!(nlp, :neval_jtprod)
+  Jtv .= [-2 * x[1]; 1.0] * v[1]
+  return Jtv
 end

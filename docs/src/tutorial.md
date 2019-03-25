@@ -1,5 +1,9 @@
 # Tutorial
 
+```@contents
+Pages = ["tutorial.md"]
+```
+
 NLPModels.jl was created for two purposes:
 
  - Allow users to access problem databases in an unified way.
@@ -13,14 +17,11 @@ NLPModels.jl was created for two purposes:
  As a consequence, optimization methods designed according to the NLPModels API
  will accept NLPModels of any provenance.
  See, for instance,
- [Optimize.jl](https://github.com/JuliaSmoothOptimizers/Optimize.jl).
+ [JSOSolvers.jl](https://github.com/JuliaSmoothOptimizers/JSOSolvers.jl) and
+ [NLPModelsIpopt.jl](https://github.com/JuliaSmoothOptimizers/NLPModelsIpopt.jl).
 
-The main interfaces for user defined problems are
-
-- [ADNLPModel](models/#adnlpmodel), which defines a model easily, using automatic
-  differentiation.
-- [SimpleNLPModel](models/#simplenlpmodel), which allows users to handle all functions themselves,
-  giving
+The main interface for user defined problems is [ADNLPModel](@ref), which defines a
+model easily, using automatic differentiation.
 
 ## ADNLPModel Tutorial
 
@@ -78,6 +79,8 @@ Namely, the method
 6. Update ``k = k + 1`` and go to step 2.
 
 ```@example adnlp
+using LinearAlgebra
+
 function steepest(nlp; itmax=100000, eta=1e-4, eps=1e-6, sigma=0.66)
   x = nlp.meta.x0
   fx = obj(nlp, x)
@@ -118,7 +121,7 @@ Newton step.
 
 ```@example adnlp
 g(x) = grad(nlp, x)
-H(x) = hess(nlp, x) + triu(hess(nlp, x)', 1)
+H(x) = Symmetric(hess(nlp, x), :L)
 x = nlp.meta.x0
 d = -H(x)\g(x)
 ```
@@ -127,6 +130,7 @@ or a few
 
 ```@example adnlp
 for i = 1:5
+  global x
   x = x - H(x)\g(x)
   println("x = $x")
 end
@@ -135,17 +139,19 @@ end
 Also, notice how we can reuse the method.
 
 ```@example adnlp
-f(x) = (x[1]^2 + x[2]^2 - 4)^2 + (x[1]*x[2] - 1)^2
-x0 = [2.0; 1.0]
+f(x) = (x[1]^2 + x[2]^2 - 5)^2 + (x[1]*x[2] - 2)^2
+x0 = [3.0; 2.0]
 nlp = ADNLPModel(f, x0)
 
 x, fx, ngx, optimal, iter = steepest(nlp)
 ```
 
-Even using a different model.
+Even using a different model. In this case, a model from
+[NLPModelsJuMP](https://github.com/JuliaSmoothOptimizers/NLPModelsJuMP.jl) implemented in
+[OptimizationProblems](https://github.com/JuliaSmoothOptimizers/OptimizationProblems.jl).
 
 ```@example adnlp
-using OptimizationProblems # Defines a lot of JuMP models
+using NLPModelsJuMP, OptimizationProblems
 
 nlp = MathProgNLPModel(woods())
 x, fx, ngx, optimal, iter = steepest(nlp)
@@ -173,75 +179,156 @@ println("cx = $(cons(nlp, nlp.meta.x0))")
 println("Jx = $(jac(nlp, nlp.meta.x0))")
 ```
 
-## SimpleNLPModel Tutorial
+## Manual model
 
-SimpleNLPModel allows you to pass every single function of the model.
-On the other hand, it doesn't handle anything else. Calling an undefined
-function will throw a `NotImplementedError`.
-Only the objective function is mandatory (if you don't need it, pass `x->0`).
+Sometimes you want or need to input your derivatives by hand the easier way to do so is
+to define a new model. Which functions you want to define depend on which solver you are
+using. In out `test` folder, we have the files `hs5.jl`, `hs6.jl`, `hs10.jl`, `hs11.jl`,
+`hs14.jl` and `brownden.jl` as examples. We present the relevant part of `hs6.jl` here
+as well:
 
-```@example slp
+```@example hs6
+import NLPModels: increment!
 using NLPModels
 
-f(x) = (x[1] - 1.0)^2 + 4*(x[2] - 1.0)^2
-x0 = zeros(2)
-nlp = SimpleNLPModel(f, x0)
+mutable struct HS6 <: AbstractNLPModel
+  meta :: NLPModelMeta
+  counters :: Counters
+end
 
-fx = obj(nlp, nlp.meta.x0)
-println("fx = $fx")
+function HS6()
+  meta = NLPModelMeta(2, ncon=1, nnzh=1, nnzj=2, x0=[-1.2; 1.0], lcon=[0.0], ucon=[0.0], name="hs6")
 
-# grad(nlp, nlp.meta.x0) # This is undefined
-```
+  return HS6(meta, Counters())
+end
 
-```@example slp
-g(x) = [2*(x[1] - 1.0); 8*(x[2] - 1.0)]
-nlp = SimpleNLPModel(f, x0, g=g)
+function NLPModels.obj(nlp :: HS6, x :: AbstractVector)
+  increment!(nlp, :neval_obj)
+  return (1 - x[1])^2
+end
 
-grad(nlp, nlp.meta.x0)
-```
-
-"But what's to stop me from defining `g` however I want?"
-Nothing. So you have to be careful on how you're defining it.
-You should probably check your derivatives.
-If the function is simply defined, you can try using automatic differentiation.
-Alternatively, you can use the [derivative checker](dercheck).
-
-```@example slp
-gradient_check(nlp)
-```
-
-```@example slp
-gwrong(x) = [2*(x[1] - 1.0); 8*x[2] - 1.0] # Find the error
-nlp = SimpleNLPModel(f, x0, g=gwrong)
-gradient_check(nlp)
-```
-
-For constrained problems, we still need the constraints function, `lcon` and `ucon`.
-Also, let's pass the Jacobian-vector product.
-
-```@example slp
-c(x) = [x[1]^2 + x[2]^2; x[1]*x[2] - 1]
-lcon = [1.0; 0.0]
-ucon = [4.0; 0.0]
-Jacprod(x, v) = [2*x[1]*v[1] + 2*x[2]*v[2]; x[2]*v[1] + x[1]*v[2]]
-nlp = SimpleNLPModel(f, x0, c=c, lcon=lcon, ucon=ucon, g=g, Jp=Jacprod)
-jprod(nlp, ones(2), ones(2))
-```
-
-Furthermore, NLPModels also works with inplace operations.
-Since some models do not take full advantage of this (like ADNLPModel),
-a user might want to define his/her own functions that do.
-
-```@example slp2
-using NLPModels # hide
-f(x) = (x[1] - 1.0)^2 + 4*(x[2] - 1.0)^2
-x0 = zeros(2)
-g!(x, gx) = begin
-  gx[1] = 2*(x[1] - 1.0)
-  gx[2] = 8*(x[2] = 1.0)
+function NLPModels.grad!(nlp :: HS6, x :: AbstractVector, gx :: AbstractVector)
+  increment!(nlp, :neval_grad)
+  gx .= [2 * (x[1] - 1); 0.0]
   return gx
 end
-nlp = SimpleNLPModel(f, x0, g! =g!) # Watchout, g!=g! is interpreted as g != g!
-gx = zeros(2)
-grad!(nlp, nlp.meta.x0, gx)
+
+function NLPModels.hess(nlp :: HS6, x :: AbstractVector; obj_weight=1.0, y=Float64[])
+  increment!(nlp, :neval_hess)
+  w = length(y) > 0 ? y[1] : 0.0
+  return [2.0 * obj_weight - 20 * w   0.0; 0.0 0.0]
+end
+
+function NLPModels.hess_coord(nlp :: HS6, x :: AbstractVector; obj_weight=1.0, y=Float64[])
+  increment!(nlp, :neval_hess)
+  w = length(y) > 0 ? y[1] : 0.0
+  return ([1], [1], [2.0 * obj_weight - 20 * w])
+end
+
+function NLPModels.hprod!(nlp :: HS6, x :: AbstractVector, v :: AbstractVector, Hv :: AbstractVector; obj_weight=1.0, y=Float64[])
+  increment!(nlp, :neval_hprod)
+  w = length(y) > 0 ? y[1] : 0.0
+  Hv .= [(2.0 * obj_weight - 20 * w) * v[1]; 0.0]
+  return Hv
+end
+
+function NLPModels.cons!(nlp :: HS6, x :: AbstractVector, cx :: AbstractVector)
+  increment!(nlp, :neval_cons)
+  cx[1] = 10 * (x[2] - x[1]^2)
+  return cx
+end
+
+function NLPModels.jac(nlp :: HS6, x :: AbstractVector)
+  increment!(nlp, :neval_jac)
+  return [-20 * x[1]  10.0]
+end
+
+function NLPModels.jac_coord(nlp :: HS6, x :: AbstractVector)
+  increment!(nlp, :neval_jac)
+  return ([1, 1], [1, 2], [-20 * x[1], 10.0])
+end
+
+function NLPModels.jprod!(nlp :: HS6, x :: AbstractVector, v :: AbstractVector, Jv :: AbstractVector)
+  increment!(nlp, :neval_jprod)
+  Jv .= [-20 * x[1] * v[1] + 10 * v[2]]
+  return Jv
+end
+
+function NLPModels.jtprod!(nlp :: HS6, x :: AbstractVector, v :: AbstractVector, Jtv :: AbstractVector)
+  increment!(nlp, :neval_jtprod)
+  Jtv .= [-20 * x[1]; 10] * v[1]
+  return Jtv
+end
+```
+
+```@example hs6
+hs6 = HS6()
+x = hs6.meta.x0
+(obj(hs6, x), grad(hs6, x))
+```
+
+```@example hs6
+cons(hs6, x)
+```
+
+Notice that we did not define `grad` nor `cons`, but `grad!` and `cons!` were defined.
+The default `grad` and `cons` uses the inplace version, so there's no need to redefine
+them.
+
+## Nonlinear least squares models
+
+In addition to the general nonlinear model, we can define the residual function for a
+nonlinear least-squares problem. In other words, the objective function of the problem
+is of the form ``f(x) = \tfrac{1}{2}\|F(x)\|^2``, and we can define the function ``F``
+and its derivatives.
+
+A simple way to define an NLS problem is with `ADNLSModel`, which uses automatic
+differentiation.
+
+```@example nls
+using NLPModels # hide
+F(x) = [x[1] - 1.0; 10 * (x[2] - x[1]^2)]
+x0 = [-1.2; 1.0]
+nls = ADNLSModel(F, x0, 2) # 2 nonlinear equations
+residual(nls, x0)
+```
+
+```@example nls
+jac_residual(nls, x0)
+```
+
+We can also define a linear least squares by passing the matrices that define the
+problem
+```math
+\begin{align*}
+\min \quad & \tfrac{1}{2}\|Ax - b\|^2 \\
+& c_L  \leq Cx \leq c_U \\
+& \ell \leq  x \leq u.
+\end{align*}
+```
+```@example nls
+using LinearAlgebra # hide
+A = rand(10, 3)
+b = rand(10)
+C = rand(2, 3)
+nls = LLSModel(A, b, C=C, lcon=zeros(2), ucon=zeros(2), lvar=-ones(3), uvar=ones(3))
+
+@info norm(jac_residual(nls, zeros(3)) - A)
+@info norm(jac(nls, zeros(3)) - C)
+```
+
+Another way to define a nonlinear least squares is using `FeasibilityResidual` to
+consider the constraints of a general nonlinear problem as the residual of the NLS.
+```@example nls
+nlp = ADNLPModel(x->0, # objective doesn't matter,
+                 ones(2), c=x->[x[1] + x[2] - 1; x[1] * x[2] - 2],
+                 lcon=zeros(2), ucon=zeros(2))
+nls = FeasibilityResidual(nlp)
+s = 0.0
+for t = 1:100
+  global s
+  x = rand(2)
+  s += norm(residual(nls, x) - cons(nlp, x))
+end
+@info "s = $s"
 ```
