@@ -5,20 +5,21 @@ export has_bounds, bound_constrained, unconstrained, linearly_constrained,
 abstract type AbstractNLPModel end
 
 mutable struct Counters
-  neval_obj    :: Int  # Number of objective evaluations.
-  neval_grad   :: Int  # Number of objective gradient evaluations.
-  neval_cons   :: Int  # Number of constraint vector evaluations.
-  neval_jcon   :: Int  # Number of individual constraint evaluations.
-  neval_jgrad  :: Int  # Number of individual constraint gradient evaluations.
-  neval_jac    :: Int  # Number of constraint Jacobian evaluations.
-  neval_jprod  :: Int  # Number of Jacobian-vector products.
-  neval_jtprod :: Int  # Number of transposed Jacobian-vector products.
-  neval_hess   :: Int  # Number of Lagrangian/objective Hessian evaluations.
-  neval_hprod  :: Int  # Number of Lagrangian/objective Hessian-vector products.
-  neval_jhprod :: Int  # Number of individual constraint Hessian-vector products.
+  neval_obj     :: Int  # Number of objective evaluations.
+  neval_grad    :: Int  # Number of objective gradient evaluations.
+  neval_cons    :: Int  # Number of constraint vector evaluations.
+  neval_jcon    :: Int  # Number of individual constraint evaluations.
+  neval_jgrad   :: Int  # Number of individual constraint gradient evaluations.
+  neval_jac     :: Int  # Number of constraint Jacobian evaluations.
+  neval_jprod   :: Int  # Number of Jacobian-vector products.
+  neval_jtprod  :: Int  # Number of transposed Jacobian-vector products.
+  neval_hess    :: Int  # Number of Lagrangian/objective Hessian evaluations.
+  neval_hprod   :: Int  # Number of Lagrangian/objective Hessian-vector products.
+  neval_jhprod  :: Int  # Number of individual constraint Hessian-vector products.
+  neval_Tuvprod :: Int  # Number of individual Tensor-vector-Vector products
 
   function Counters()
-    return new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    return new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
   end
 end
 
