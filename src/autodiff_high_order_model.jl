@@ -1,4 +1,5 @@
 using ForwardDiff
+using ReverseDiff
 
 export HOADNLPModel, obj, grad, grad!, cons, cons!, jac, jprod,
        jprod!, jtprod, jtprod!, hess, hprod, hprod!, ∇f³xuv
@@ -10,29 +11,33 @@ are documented here.
 For further documentation, refer to the HOADNLPModel.
 """
 mutable struct HOADNLPModel <: AbstractNLPModel
-  meta :: NLPModelMeta
+  meta     :: NLPModelMeta
 
   counters :: Counters
 
   # Functions
   f :: Function
   c :: Function
+
+  # AD Packages
+  AD :: Any
 end
 
 function HOADNLPModel(f::Function, x0::AbstractVector; y0::AbstractVector = eltype(x0)[],
                       lvar::AbstractVector = eltype(x0)[], uvar::AbstractVector = eltype(x0)[],
                       lcon::AbstractVector = eltype(x0)[], ucon::AbstractVector = eltype(x0)[],
                       c::Function = (args...)->throw(NotImplementedError("cons")),
-                      name::String = "Generic", lin::AbstractVector{Int}=Int[])
+                      name::String = "Generic", lin::AbstractVector{Int}=Int[],
+                      AD :: Any = ForwardDiff)
 
   nvar = length(x0)
   length(lvar) == 0 && (lvar = -Inf*ones(nvar))
   length(uvar) == 0 && (uvar =  Inf*ones(nvar))
   ncon = maximum([length(lcon); length(ucon); length(y0)])
 
-  A = ForwardDiff.hessian(f, x0)
+  A = AD.hessian(f, x0)
   for i = 1:ncon
-    A += ForwardDiff.hessian(x->c(x)[i], x0) * (-1)^i
+    A += AD.hessian(x->c(x)[i], x0) * (-1)^i
   end
   nnzh = nvar * (nvar + 1) / 2
   nnzj = 0
@@ -49,7 +54,7 @@ function HOADNLPModel(f::Function, x0::AbstractVector; y0::AbstractVector = elty
     lcon=lcon, ucon=ucon, nnzj=nnzj, nnzh=nnzh, lin=lin, nln=nln, minimize=true,
     islp=false, name=name)
 
-  return HOADNLPModel(meta, HighOrderCounters(), f, c)
+  return HOADNLPModel(meta, Counters(), f, c, AD)
 end
 
 function obj(nlp :: HOADNLPModel, x :: AbstractVector)
@@ -59,12 +64,12 @@ end
 
 function grad(nlp :: HOADNLPModel, x :: AbstractVector)
   increment!(nlp, :neval_grad)
-  return ForwardDiff.gradient(nlp.f, x)
+  return nlp.AD.gradient(nlp.f, x)
 end
 
 function grad!(nlp :: HOADNLPModel, x :: AbstractVector, g :: AbstractVector)
   increment!(nlp, :neval_grad)
-  ForwardDiff.gradient!(view(g, 1:length(x)), nlp.f, x)
+  nlp.AD.gradient!(view(g, 1:length(x)), nlp.f, x)
   return g
 end
 
@@ -81,7 +86,7 @@ end
 
 function jac(nlp :: HOADNLPModel, x :: AbstractVector)
   increment!(nlp, :neval_jac)
-  return ForwardDiff.jacobian(nlp.c, x)
+  return nlp.AD.jacobian(nlp.c, x)
 end
 
 function jac_coord(nlp :: HOADNLPModel, x :: AbstractVector)
@@ -97,33 +102,33 @@ end
 
 function jprod(nlp :: HOADNLPModel, x :: AbstractVector, v :: AbstractVector)
   increment!(nlp, :neval_jprod)
-  return ForwardDiff.jacobian(nlp.c, x) * v
+  return nlp.AD.jacobian(nlp.c, x) * v
 end
 
 function jprod!(nlp :: HOADNLPModel, x :: AbstractVector, v :: AbstractVector, Jv :: AbstractVector)
   increment!(nlp, :neval_jprod)
-  Jv[1:nlp.meta.ncon] = ForwardDiff.jacobian(nlp.c, x) * v
+  Jv[1:nlp.meta.ncon] = nlp.AD.jacobian(nlp.c, x) * v
   return Jv
 end
 
 function jtprod(nlp :: HOADNLPModel, x :: AbstractVector, v :: AbstractVector)
   increment!(nlp, :neval_jtprod)
-  return ForwardDiff.jacobian(nlp.c, x)' * v
+  return nlp.AD.jacobian(nlp.c, x)' * v
 end
 
 function jtprod!(nlp :: HOADNLPModel, x :: AbstractVector, v :: AbstractVector, Jtv :: AbstractVector)
   increment!(nlp, :neval_jtprod)
-  Jtv[1:nlp.meta.nvar] = ForwardDiff.jacobian(nlp.c, x)' * v
+  Jtv[1:nlp.meta.nvar] = nlp.AD.jacobian(nlp.c, x)' * v
   return Jtv
 end
 
 function hess(nlp :: HOADNLPModel, x :: AbstractVector; obj_weight :: Real = one(eltype(x)), y :: AbstractVector = eltype(x)[])
   increment!(nlp, :neval_hess)
   Hx = obj_weight == 0.0 ? spzeros(nlp.meta.nvar, nlp.meta.nvar) :
-       ForwardDiff.hessian(nlp.f, x) * obj_weight
+       nlp.AD.hessian(nlp.f, x) * obj_weight
   for i = 1:min(length(y), nlp.meta.ncon)
     if y[i] != 0.0
-      Hx += ForwardDiff.hessian(x->nlp.c(x)[i], x) * y[i]
+      Hx += nlp.AD.hessian(x->nlp.c(x)[i], x) * y[i]
     end
   end
   return tril(Hx)
@@ -151,10 +156,10 @@ function hprod!(nlp :: HOADNLPModel, x :: AbstractVector, v :: AbstractVector, H
   increment!(nlp, :neval_hprod)
   n = nlp.meta.nvar
   Hv[1:n] = obj_weight == 0.0 ? zeros(nlp.meta.nvar) :
-          ForwardDiff.hessian(nlp.f, x) * v * obj_weight
+          nlp.AD.hessian(nlp.f, x) * v * obj_weight
   for i = 1:min(length(y), nlp.meta.ncon)
     if y[i] != 0.0
-      Hv[1:n] += ForwardDiff.hessian(x->nlp.c(x)[i], x) * v * y[i]
+      Hv[1:n] += nlp.AD.hessian(x->nlp.c(x)[i], x) * v * y[i]
     end
   end
   return Hv
@@ -162,21 +167,11 @@ end
 
 
 function ∇f³xuv(nlp :: HOADNLPModel, x :: AbstractVector, u :: AbstractVector, v :: AbstractVector)
-    ∇f(x) = ForwardDiff.gradient(nlp.f, x)
+    ∇f(x) = nlp.AD.gradient(nlp.f, x)
     ϕᵤ(x) = ∇f(x)'*u
-    ∇ϕᵤ(x) = ForwardDiff.gradient(ϕᵤ, x)
+    ∇ϕᵤ(x) = nlp.AD.gradient(ϕᵤ, x)
     ψᵥ(x) =  ∇ϕᵤ(x)' * v
-    ∇ψᵥ(x) = ForwardDiff.gradient(ψᵥ, x)
+    ∇ψᵥ(x) = nlp.AD.gradient(ψᵥ, x)
     increment!(nlp, :neval_Tuvprod)
-    return ∇ψᵥ(x)
-end
-
-function ∇f³xuv(f :: Function, x :: AbstractVector, u :: AbstractVector, v :: AbstractVector)
-    ∇f(x) = ForwardDiff.gradient(f, x)
-    ϕᵤ(x) = ∇f(x)'*u
-    ∇ϕᵤ(x) = ForwardDiff.gradient(ϕᵤ, x)
-    ψᵥ(x) =  ∇ϕᵤ(x)' * v
-    ∇ψᵥ(x) = ForwardDiff.gradient(ψᵥ, x)
-    # increment!(nlp, :neval_tuvprod)
     return ∇ψᵥ(x)
 end
